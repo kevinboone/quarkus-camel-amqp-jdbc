@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+/*===========================================================================
+ 
+  camel-routes.xml 
+
+  This file is included at run time by matching a pattern specified in 
+  application.properties. The name is not significant, so long as it
+  matches the pattern.
+
+  Tokens of the form {{xxx.yyy}} are placeholders, that are substituted
+  from values in application.properties, or from environment variables.
+
+  Copyright (c)2022 Kevin Boone, GPL v3.0
+
+===========================================================================*/
+-->
+
+<routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xmlns="http://camel.apache.org/schema/spring"
+        xsi:schemaLocation="
+            http://camel.apache.org/schema/spring
+            https://camel.apache.org/schema/spring/camel-spring.xsd">
+
+  <route id="amqp_to_jdbc" autoStartup="false">
+
+    <onException>
+      <!--
+      If we catch an SLQException, a database update has failed, for
+      some reason. By this point, the Camel exchange body will contain an
+      SQL statement, because that's what camel-jdbc expects. The original
+      message body, from AMQP, will have been stored in the exchange header
+      "dbvalue". So we must restore value to the exchange body, before
+      writing out the message as a file. 
+      -->   
+      <exception>java.sql.SQLException</exception>
+      <redeliveryPolicy maximumRedeliveries="2"/>
+      <setBody>
+        <simple>${header.dbvalue}</simple>
+      </setBody>
+      <to uri="file://dead_messages"/>
+    </onException>
+
+    <!-- Consume from the named queue -->
+    <from uri="amqp:queue:{{queue.name}}"/>
+    <!-- Using named paramters in the DB query avoids the need to
+         escape the SQL using additional code. We'll store the
+         original message body in a header, both for the SQL 
+         statement, but also to recover it in the exception 
+         handler -->
+    <to uri="log://from_amqp"/>
+    <setHeader name="dbvalue"><simple>${body}</simple></setHeader>
+    <setBody>
+      <constant>
+        insert into {{table.name}} (body) values (:?dbvalue)
+      </constant>
+      </setBody>
+      <to uri="jdbc:camel-ds?useHeadersAsParameters=true"/>
+  </route>
+
+</routes>
+
